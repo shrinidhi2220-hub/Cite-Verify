@@ -1,0 +1,4 @@
+fastapi
+PyMuPDF
+python-docx
+python-multipart
