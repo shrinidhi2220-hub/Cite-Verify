@@ -1,9 +1,35 @@
+﻿# Python
 .venv/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+*.db
+
+# Environment and secrets
 .env
 .env.*
 !.env.example
-.pytest_cache/
-*.db
-storage/
+
+# Node.js
+node_modules/
+
+# Runtime data and uploads
+uploads/
+data/*.json
+
+# Frontend build
+frontend/dist/
+
+# Local backups - do not commit
+backend_backup*/
+CiteVerify-*.zip
+
+# Local runtime data and backups
+data/
+*.bak
+CiteVerify-*.zip
+CiteVerify-Claim-Extraction-Fix/
+_claim_extraction_patch/
+_retrieval_fix/
+CiteVerify-Connect-Research*.ps1
+INSTALL_README.md

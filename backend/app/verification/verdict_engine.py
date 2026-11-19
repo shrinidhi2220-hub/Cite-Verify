@@ -1,4 +1,3 @@
-
 from .enums import (
     Verdict,
     EvidenceStrength,
@@ -22,13 +21,17 @@ def decide_verdict(
     assessments: list[EvidenceAssessment],
     numerical_discrepancies: list[NumericalDiscrepancy] | None = None,
 ) -> VerdictDecision:
+    """Create a deterministic verdict from validated passage assessments.
 
+    A direct SUPPORTS assessment is evidence that the complete supplied claim
+    is established by that passage. Other PARTIALLY_SUPPORTS passages do not
+    cancel that direct support. Contradicting evidence still prevents a clean
+    SUPPORTED/CONTRADICTED decision and produces PARTIALLY_SUPPORTED.
+    """
     discrepancies = numerical_discrepancies or []
-
     quality = assess_evidence_quality(request)
 
     input_ids = [item.evidence_id for item in assessments]
-
     if len(input_ids) != len(set(input_ids)):
         raise ValueError(
             "An evidence passage must not be assessed more than once."
@@ -36,10 +39,9 @@ def decide_verdict(
 
     usable_ids = set(quality.usable_evidence_ids)
     unknown_ids = set(input_ids) - usable_ids
-
     if unknown_ids:
         raise ValueError(
-            f"Assessments contain unknown or unusable evidence IDs: "
+            "Assessments contain unknown or unusable evidence IDs: "
             f"{sorted(unknown_ids)}"
         )
 
@@ -84,19 +86,16 @@ def decide_verdict(
         for item in assessments
         if item.relation == EvidenceRelation.SUPPORTS
     ]
-
     partial_ids = [
         item.evidence_id
         for item in assessments
         if item.relation == EvidenceRelation.PARTIALLY_SUPPORTS
     ]
-
     contradiction_ids = [
         item.evidence_id
         for item in assessments
         if item.relation == EvidenceRelation.CONTRADICTS
     ]
-
     neutral_ids = [
         item.evidence_id
         for item in assessments
@@ -107,44 +106,54 @@ def decide_verdict(
         }
     ]
 
-    has_support = bool(support_ids or partial_ids)
-    has_contradiction = bool(contradiction_ids)
     has_uncertainty = any(
         item.relation == EvidenceRelation.UNCERTAIN
         for item in assessments
     )
 
-    # Mixed support and contradiction must not become
-    # an oversimplified supported/contradicted result.
-    if has_support and has_contradiction:
+    # Decision precedence:
+    # 1. Direct support + contradiction is mixed evidence.
+    # 2. Partial support + contradiction is also mixed evidence.
+    # 3. Contradiction alone is contradicted.
+    # 4. Direct support without contradiction establishes the claim.
+    # 5. Partial support alone does not establish the whole claim.
+    if contradiction_ids and (support_ids or partial_ids):
         verdict = Verdict.PARTIALLY_SUPPORTED
         explanation = (
             "The retrieved evidence contains both supporting "
             "and contradicting findings. The claim needs closer "
             "review of study context and conflicting results."
         )
+        limitations.append(
+            "Mixed supporting and contradicting evidence."
+        )
 
-        limitations.append("Mixed supporting and contradicting evidence.")
-
-    elif has_contradiction:
+    elif contradiction_ids:
         verdict = Verdict.CONTRADICTED
         explanation = (
             "The assessed research evidence directly conflicts "
             "with the supplied claim."
         )
 
+    elif support_ids:
+        verdict = Verdict.SUPPORTED
+        explanation = (
+            "At least one assessed research passage directly supports "
+            "the complete supplied claim, and no contradicting passage "
+            "was identified."
+        )
+        if partial_ids:
+            limitations.append(
+                "Some additional passages only partially support the claim. "
+                "The supported decision is based on at least one passage "
+                "classified as directly supporting the complete claim."
+            )
+
     elif partial_ids:
         verdict = Verdict.PARTIALLY_SUPPORTED
         explanation = (
             "The evidence supports some aspects of the claim, "
             "but does not establish the entire statement."
-        )
-
-    elif support_ids:
-        verdict = Verdict.SUPPORTED
-        explanation = (
-            "The assessed research evidence directly supports "
-            "the supplied claim within the context of the study."
         )
 
     elif has_uncertainty:
@@ -161,15 +170,14 @@ def decide_verdict(
             "the supplied scientific claim."
         )
 
-    # A numerical discrepancy is a warning, not proof
-    # of contradiction. Downgrade a supported result
-    # until the discrepancy is reviewed.
+    # A numerical discrepancy is a warning, not proof of contradiction.
+    # Downgrade a supported result until the discrepancy is reviewed.
     if discrepancies and verdict == Verdict.SUPPORTED:
         verdict = Verdict.PARTIALLY_SUPPORTED
         explanation = (
-            "The evidence appears relevant, but numerical "
-            "differences were detected. The claim requires "
-            "contextual review before it can be considered supported."
+            "The evidence appears relevant, but numerical differences "
+            "were detected. The claim requires contextual review before "
+            "it can be considered supported."
         )
 
     if discrepancies:
@@ -192,16 +200,15 @@ def decide_verdict(
     # This is a transparent heuristic, not a calibrated probability.
     if quality.status == EvidenceQualityStatus.ABSTRACT_ONLY:
         strength = EvidenceStrength.LOW
-
-    elif verdict in {
-        Verdict.SUPPORTED,
-        Verdict.CONTRADICTED,
-    }:
-        strength = EvidenceStrength.HIGH
-
+    elif verdict in {Verdict.SUPPORTED, Verdict.CONTRADICTED}:
+        # Mixed direct/partial support is less uniform than all-direct support.
+        strength = (
+            EvidenceStrength.MEDIUM
+            if verdict == Verdict.SUPPORTED and partial_ids
+            else EvidenceStrength.HIGH
+        )
     elif verdict == Verdict.INSUFFICIENT_EVIDENCE:
         strength = EvidenceStrength.LOW
-
     else:
         strength = EvidenceStrength.MEDIUM
 
@@ -209,18 +216,12 @@ def decide_verdict(
         claim_id=request.claim_id,
         verdict=verdict,
         explanation=explanation,
-
         supporting_evidence_ids=support_ids + partial_ids,
         contradicting_evidence_ids=contradiction_ids,
         neutral_evidence_ids=neutral_ids,
-
         numerical_discrepancies=discrepancies,
-
         evidence_strength=strength,
         limitations=list(dict.fromkeys(limitations)),
-
-        # Keep human review enabled for all academic verdicts.
         human_review_required=True,
-
         method=VerificationMethod.RULE_BASED,
     )
