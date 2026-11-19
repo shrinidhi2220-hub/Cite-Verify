@@ -5,6 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.verification_routes import router as verification_router
+from .api.research_routes import router as research_router
+from .document.upload import router as document_router
 
 
 app = FastAPI(
@@ -36,6 +38,12 @@ app.add_middleware(
 
 
 app.include_router(verification_router)
+app.include_router(research_router)
+app.include_router(
+    document_router,
+    prefix="/api/v1/documents",
+    tags=["Documents"],
+)
 
 
 @app.get("/health")

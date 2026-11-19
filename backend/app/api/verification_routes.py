@@ -15,6 +15,10 @@ from ..verification.schemas import (
 from ..services.verification_service import (
     verify_claim_end_to_end,
 )
+from ..services.research_evidence_service import (
+    prepare_research_evidence,
+)
+from ..retrieval.research_models import ResearchEvidenceRequest
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +50,7 @@ class VerificationJobStatus(BaseModel):
     ]
     result: VerdictDecision | None = None
     error: str | None = None
+    research_summary: dict[str, Any] | None = None
 
 
 # --------------------------------------------------
@@ -161,6 +166,7 @@ def run_verification(
             "status": "queued",
             "result": None,
             "error": None,
+            "research_summary": None,
         }
 
     background_tasks.add_task(
@@ -183,6 +189,117 @@ def run_verification(
         message=(
             "Verification started. "
             "Check the status endpoint for the result."
+        ),
+    )
+
+
+# --------------------------------------------------
+# BACKGROUND RESEARCH + VERIFICATION WORKER
+# --------------------------------------------------
+
+def _execute_research_verification_job(
+    job_id: str,
+    request: ResearchEvidenceRequest,
+) -> None:
+    """Run Member 2 retrieval and Member 3 verification in one job."""
+    with _jobs_lock:
+        if job_id not in _jobs:
+            return
+        _jobs[job_id]["status"] = "running"
+
+    logger.info("Research verification job started: %s", job_id)
+
+    try:
+        prepared = prepare_research_evidence(request)
+        summary = prepared.model_dump(
+            mode="json",
+            exclude={"verification_request"},
+        )
+
+        with _jobs_lock:
+            _jobs[job_id]["research_summary"] = summary
+
+        result = verify_claim_end_to_end(prepared.verification_request)
+
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "completed"
+            _jobs[job_id]["result"] = result
+            _jobs[job_id]["error"] = None
+
+        logger.info("Research verification job completed: %s", job_id)
+
+    except ValueError as exc:
+        logger.warning(
+            "Research verification input failed for job %s: %s",
+            job_id,
+            exc,
+            exc_info=True,
+        )
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = str(exc)
+
+    except RuntimeError:
+        logger.exception("Research/AI service failed for job: %s", job_id)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = (
+                "Research retrieval or AI verification failed. "
+                "Check provider availability and retry."
+            )
+
+    except Exception:
+        logger.exception("Unexpected research verification failure: %s", job_id)
+        with _jobs_lock:
+            _jobs[job_id]["status"] = "failed"
+            _jobs[job_id]["error"] = (
+                "An unexpected research verification error occurred."
+            )
+
+
+# --------------------------------------------------
+# POST: RUN RESEARCH RETRIEVAL + VERIFICATION
+# --------------------------------------------------
+
+@router.post(
+    "/run-from-research",
+    response_model=VerificationJobAccepted,
+    status_code=202,
+)
+def run_verification_from_research(
+    request: ResearchEvidenceRequest,
+    background_tasks: BackgroundTasks,
+):
+    """Search research sources, retrieve passages and verify the claim.
+
+    This one-call workflow connects Member 2's retrieval modules to
+    Member 3's Gemini and deterministic verdict pipeline.
+    """
+    job_id = uuid4().hex
+
+    with _jobs_lock:
+        _jobs[job_id] = {
+            "status": "queued",
+            "result": None,
+            "error": None,
+            "research_summary": None,
+        }
+
+    background_tasks.add_task(
+        _execute_research_verification_job,
+        job_id,
+        request,
+    )
+
+    logger.info("Research verification job queued: %s", job_id)
+
+    return VerificationJobAccepted(
+        job_id=job_id,
+        status="queued",
+        status_url=f"/api/v1/verification/status/{job_id}",
+        message=(
+            "Research retrieval and claim verification started. "
+            "Check the status endpoint for progress and the final verdict."
         ),
     )
 
@@ -217,4 +334,5 @@ def get_verification_status(job_id: str):
         status=snapshot["status"],
         result=snapshot["result"],
         error=snapshot["error"],
+        research_summary=snapshot.get("research_summary"),
     )
