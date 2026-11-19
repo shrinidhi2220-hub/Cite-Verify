@@ -9,26 +9,27 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
     """
     Search Semantic Scholar for academic papers.
 
-    Returns paper metadata, including DOI, authors, year and abstract.
+    Returns paper metadata, including DOI, authors, year,
+    abstract, URL and open-access PDF information.
     """
 
-    if not query or not query.strip():
+    if not isinstance(query, str) or not query.strip():
         raise ValueError("Search query cannot be empty.")
 
-    if not 1 <= limit <= 20:
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 20:
         raise ValueError("limit must be between 1 and 20.")
 
     params = {
         "query": query.strip(),
         "limit": limit,
-        "fields": "title,authors,year,externalIds,abstract,url",
+        "fields": "title,authors,year,externalIds,abstract,url,openAccessPdf",
     }
 
     headers = {
         "User-Agent": "CiteVerify/0.1"
     }
 
-    # API key is optional for basic testing.
+    # API key is optional.
     api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY")
     if api_key:
         headers["x-api-key"] = api_key
@@ -63,6 +64,7 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
     papers = []
 
     for paper in data.get("data", []):
+
         authors = [
             author.get("name")
             for author in paper.get("authors", [])
@@ -70,6 +72,7 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
         ]
 
         external_ids = paper.get("externalIds") or {}
+        open_access_pdf = paper.get("openAccessPdf") or {}
 
         papers.append({
             "semantic_scholar_id": paper.get("paperId"),
@@ -79,6 +82,10 @@ def search_papers(query: str, limit: int = 5) -> list[dict]:
             "authors": authors,
             "abstract": paper.get("abstract"),
             "url": paper.get("url"),
+
+            # New PDF information
+            "pdf_url": open_access_pdf.get("url"),
+            "open_access_pdf_status": open_access_pdf.get("status"),
         })
 
     return papers

@@ -9,19 +9,20 @@ def search_works(query: str, per_page: int = 5) -> list[dict]:
     """
     Search OpenAlex for academic papers.
 
-    Returns basic publication metadata for each result.
+    Returns publication metadata, authors, PDF URLs
+    and open-access landing page URLs.
     """
 
-    if not query.strip():
+    if not isinstance(query, str) or not query.strip():
         raise ValueError("Search query cannot be empty.")
 
-    if not 1 <= per_page <= 25:
+    if not isinstance(per_page, int) or isinstance(per_page, bool) or not 1 <= per_page <= 25:
         raise ValueError("per_page must be between 1 and 25.")
 
     params = {
-        "search": query,
+        "search": query.strip(),
         "per_page": per_page,
-        "select": "id,title,doi,publication_year,authorships",
+        "select": "id,title,doi,publication_year,authorships,best_oa_location",
     }
 
     # An API key is optional for basic testing.
@@ -52,11 +53,15 @@ def search_works(query: str, per_page: int = 5) -> list[dict]:
     papers = []
 
     for work in data.get("results", []):
+
         authors = [
             item.get("author", {}).get("display_name")
             for item in work.get("authorships", [])
             if item.get("author", {}).get("display_name")
         ]
+
+        # best_oa_location can be null when no OA location exists.
+        best_oa_location = work.get("best_oa_location") or {}
 
         papers.append({
             "openalex_id": work.get("id"),
@@ -64,6 +69,10 @@ def search_works(query: str, per_page: int = 5) -> list[dict]:
             "doi": work.get("doi"),
             "publication_year": work.get("publication_year"),
             "authors": authors,
+
+            # New PDF and landing-page fields
+            "pdf_url": best_oa_location.get("pdf_url"),
+            "landing_page_url": best_oa_location.get("landing_page_url"),
         })
 
     return papers
