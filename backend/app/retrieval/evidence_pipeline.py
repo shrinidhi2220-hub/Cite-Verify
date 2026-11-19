@@ -134,7 +134,6 @@ def retrieve_claim_evidence(
         page numbers, evidence text and retrieval scores.
     """
 
-
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query cannot be empty.")
 
