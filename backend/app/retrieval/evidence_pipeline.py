@@ -1,4 +1,81 @@
 
+"""
+CITEVERIFY — SYSTEM PIPELINE ARCHITECTURE
+==========================================
+
+1. SYSTEM INPUT
+---------------
+File format: .pdf
+
+The user uploads a research document containing:
+- Scientific claims
+- Research citations
+- References and DOI information
+
+Member 1 processes the uploaded PDF and extracts
+claims and citation metadata in structured JSON.
+
+2. MEMBER 2 INPUT
+-----------------
+Member 2 receives:
+- Scientific claim or search query (string)
+- DOI, when available (string)
+- Citation metadata (dictionary / JSON)
+
+3. MEMBER 2 PROCESSING
+----------------------
+A. Academic paper discovery
+   - OpenAlex
+   - Crossref
+   - Semantic Scholar
+
+B. Citation matching
+   - DOI matching
+   - Title matching
+
+C. PDF retrieval
+   - Obtain open-access PDF URL
+   - Download research paper (.pdf)
+
+D. Text extraction
+   - PyMuPDF
+   - Extract text page by page
+   - Preserve original page numbers
+
+E. Evidence preparation
+   - Divide text into overlapping chunks
+   - Chunk size: 150 words
+   - Overlap: 30 words
+
+F. Evidence retrieval
+   - BM25 ranking
+   - Select the most relevant passages
+
+4. MEMBER 2 OUTPUT
+------------------
+Format: Python dictionary / JSON
+
+Returns:
+- Paper metadata
+- Source IDs
+- PDF URL
+- Original page numbers
+- Evidence chunk IDs
+- Evidence text
+- BM25 retrieval scores
+- Matched query terms
+
+5. NEXT STAGE
+-------------
+Member 3 receives the retrieved claim evidence
+and performs AI-based verification using Gemini.
+
+IMPORTANT:
+Member 2 retrieves evidence.
+Member 3 evaluates whether the evidence supports
+or contradicts the scientific claim.
+"""
+
 import re
 
 from backend.app.retrieval.paper_search_service import search_academic_papers
@@ -33,17 +110,30 @@ def retrieve_claim_evidence(
     doi: str | None = None
 ) -> dict:
     """
-    Complete Member 2 research retrieval pipeline.
+    Member 2: Research Evidence Retrieval Pipeline.
 
-    1. Search academic databases.
-    2. Identify accessible PDF sources.
-    3. Download PDFs.
-    4. Extract page-wise text.
-    5. Divide text into evidence chunks.
-    6. Rank evidence using BM25.
+    INPUT:
+        query: Scientific claim or search query (string).
+        per_page: Maximum papers requested per search provider.
+        top_k: Number of relevant evidence passages to return.
+        doi: Optional DOI for exact paper lookup.
 
-    Returns source metadata and traceable evidence passages.
+    PROCESS:
+        1. Search academic databases.
+        2. Match research papers.
+        3. Retrieve and download accessible PDFs.
+        4. Extract text using PyMuPDF.
+        5. Generate overlapping evidence chunks.
+        6. Rank passages using BM25.
+
+    OUTPUT:
+        A structured Python dictionary that can be
+        serialized into JSON.
+
+        Includes paper metadata, source identifiers,
+        page numbers, evidence text and retrieval scores.
     """
+
 
     if not isinstance(query, str) or not query.strip():
         raise ValueError("Query cannot be empty.")
