@@ -1,21 +1,19 @@
 
 import json
 import os
+import time
 
 from dotenv import load_dotenv
 from google import genai
 
-from .enums import (
-    EvidenceQualityStatus,
-)
-
+from .enums import EvidenceQualityStatus
 from .schemas import (
     VerificationRequest,
     AIReasoningResponse,
-    EvidenceAssessment,
 )
-
 from .evidence_quality import assess_evidence_quality
+
+
 load_dotenv()
 
 
@@ -66,6 +64,12 @@ Assess each passage independently.
 Return the complete structured JSON response matching
 the supplied response schema.
 """
+
+
+# Gemini background execution settings.
+GEMINI_REQUEST_TIMEOUT = 30
+GEMINI_MAX_WAIT_SECONDS = 120
+GEMINI_POLL_INTERVAL_SECONDS = 3
 
 
 def build_user_prompt(request: VerificationRequest) -> str:
@@ -154,8 +158,10 @@ def assess_with_gemini(
     request: VerificationRequest,
 ) -> AIReasoningResponse:
     """
-    Call Gemini 3.8 Flash and return validated
-    evidence assessments.
+    Assess supplied research evidence using Gemini.
+
+    Background execution prevents the application from waiting
+    for the complete model generation in the initial HTTP request.
 
     The API key is loaded from the local environment.
     """
@@ -178,23 +184,129 @@ def assess_with_gemini(
     user_prompt = build_user_prompt(request)
 
     try:
+        # Start Gemini processing in the background.
         interaction = client.interactions.create(
-            model=model,
-            system_instruction=SYSTEM_PROMPT,
-            input=user_prompt,
-            response_format={
-                "type": "text",
-                "mime_type": "application/json",
-                "schema": AIReasoningResponse.model_json_schema(),
-            },
+    model=model,
+    system_instruction=SYSTEM_PROMPT,
+    input=user_prompt,
+    response_format={
+        "type": "text",
+        "mime_type": "application/json",
+        "schema": AIReasoningResponse.model_json_schema(),
+    },
+    generation_config={
+        "thinking_level": "low",
+    },
+    background=True,
+    timeout=30,
+)
+
+        # Some completed responses may already contain output.
+        raw_response = getattr(
+            interaction,
+            "output_text",
+            None,
         )
+
+        # Otherwise, retrieve the background interaction.
+        if not raw_response:
+            interaction_id = getattr(
+                interaction,
+                "id",
+                None,
+            )
+
+            if not interaction_id:
+                raise RuntimeError(
+                    "Gemini did not return an interaction ID."
+                )
+
+            print(
+                f"Gemini background task started: {interaction_id}",
+                flush=True,
+            )
+
+            deadline = (
+                time.monotonic() + GEMINI_MAX_WAIT_SECONDS
+            )
+
+            while True:
+                status = str(
+                    getattr(interaction, "status", "")
+                ).lower()
+
+                if status == "completed":
+                    raw_response = getattr(
+                        interaction,
+                        "output_text",
+                        None,
+                    )
+                    break
+
+                if status in {"failed", "cancelled", "canceled"}:
+                    error_details = (
+                        getattr(interaction, "error", None)
+                        or getattr(interaction, "errors", None)
+                        or "No error details provided."
+                    )
+
+                    raise RuntimeError(
+                        f"Gemini background task {status}: "
+                        f"{error_details}"
+                    )
+
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "Gemini did not complete within "
+                        f"{GEMINI_MAX_WAIT_SECONDS} seconds."
+                    )
+
+                time.sleep(GEMINI_POLL_INTERVAL_SECONDS)
+
+                # Retrieve the latest background task status.
+                interaction = client.interactions.get(
+                    interaction_id,
+                    timeout=GEMINI_REQUEST_TIMEOUT,
+                )
+
+                current_status = str(
+                    getattr(interaction, "status", "unknown")
+                ).lower()
+
+                print(
+                    f"Gemini task status: {current_status}",
+                    flush=True,
+                )
+
+                if current_status == "completed":
+                    raw_response = getattr(
+                        interaction,
+                        "output_text",
+                        None,
+                    )
+                    break
+
+                if current_status in {
+                    "failed",
+                    "cancelled",
+                    "canceled",
+                }:
+                    error_details = (
+                        getattr(interaction, "error", None)
+                        or getattr(interaction, "errors", None)
+                        or "No error details provided."
+                    )
+
+                    raise RuntimeError(
+                        f"Gemini background task {current_status}: "
+                        f"{error_details}"
+                    )
 
     except Exception as exc:
         raise RuntimeError(
-            f"Gemini API request failed: {type(exc).__name__}: {exc}"
+            f"Gemini API request failed: "
+            f"{type(exc).__name__}: {exc}"
         ) from exc
-
-    raw_response = interaction.output_text
 
     if not raw_response:
         raise RuntimeError(
