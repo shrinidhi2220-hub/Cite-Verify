@@ -68,7 +68,7 @@ the supplied response schema.
 
 # Gemini background execution settings.
 GEMINI_REQUEST_TIMEOUT = 30
-GEMINI_MAX_WAIT_SECONDS = 120
+GEMINI_MAX_WAIT_SECONDS = 300
 GEMINI_POLL_INTERVAL_SECONDS = 3
 
 

@@ -2,16 +2,11 @@
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
-
 from backend.app.api import verification_routes
 
-from backend.app.verification.enums import (
-    Verdict,
-)
+from backend.app.verification.enums import Verdict
 
-from backend.app.verification.schemas import (
-    VerdictDecision,
-)
+from backend.app.verification.schemas import VerdictDecision
 
 
 client = TestClient(app)
@@ -56,20 +51,39 @@ def test_verification_endpoint(monkeypatch):
         ],
     }
 
+    # Start the asynchronous verification job.
     response = client.post(
         "/api/v1/verification/run",
         json=payload,
     )
 
-    assert response.status_code == 200
+    assert response.status_code == 202
 
-    data = response.json()
+    job = response.json()
 
-    assert data["claim_id"] == "claim_api_001"
-    assert data["verdict"] == "SUPPORTED"
+    assert job["job_id"]
+    assert job["status"] == "queued"
+    assert job["status_url"]
+
+    # TestClient waits for the background task to finish.
+    status_response = client.get(
+        f"/api/v1/verification/status/{job['job_id']}"
+    )
+
+    assert status_response.status_code == 200
+
+    result = status_response.json()
+
+    assert result["status"] == "completed"
+    assert result["result"]["claim_id"] == "claim_api_001"
+    assert result["result"]["verdict"] == "SUPPORTED"
+    assert result["result"]["explanation"] == (
+        "Test evidence supports this claim."
+    )
+    assert result["error"] is None
 
 
-def test_ai_service_failure_returns_503(monkeypatch):
+def test_ai_service_failure_is_reported_in_job_status(monkeypatch):
 
     def failing_verification(request):
         raise RuntimeError("Simulated AI service failure")
@@ -94,9 +108,38 @@ def test_ai_service_failure_returns_503(monkeypatch):
         ],
     }
 
+    # Starting the job should return HTTP 202,
+    # even if verification later fails.
     response = client.post(
         "/api/v1/verification/run",
         json=payload,
     )
 
-    assert response.status_code == 503
+    assert response.status_code == 202
+
+    job = response.json()
+
+    assert job["job_id"]
+    assert job["status"] == "queued"
+
+    # The actual failure is reported through the status endpoint.
+    status_response = client.get(
+        f"/api/v1/verification/status/{job['job_id']}"
+    )
+
+    assert status_response.status_code == 200
+
+    result = status_response.json()
+
+    assert result["status"] == "failed"
+    assert result["result"] is None
+    assert "unavailable" in result["error"].lower()
+
+
+def test_unknown_verification_job_returns_404():
+
+    response = client.get(
+        "/api/v1/verification/status/nonexistent_job"
+    )
+
+    assert response.status_code == 404
