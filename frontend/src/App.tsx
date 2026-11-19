@@ -293,7 +293,7 @@ function ReportPage() {
       </div>
       {claims.length ? (
         <div className="claim-list">
-          {claims.map((claim, index) => {
+          {claims.map((claim) => {
             const referenceOptions = claimReferenceOptions(claim)
             const linkedIds = new Set([...(claim.referenceIds || []), ...claim.citations.flatMap(citation => citation.referenceIds || [])])
             const hasDirectMapping = linkedIds.size > 0
